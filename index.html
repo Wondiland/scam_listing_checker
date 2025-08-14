@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>🛑 Open-Source Scam Listing Checker</title>
+  <style>
+    body { font-family: sans-serif; margin: 1rem; line-height:1.5; }
+    form { margin-bottom: 1.5rem; }
+    label { display: block; margin-bottom: .5rem; }
+    input, button { padding: .5rem; font-size: 1rem; }
+    .results { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+    .result-item { border: 1px solid #ccc; border-radius:4px; padding:.75rem; }
+    .result-item.safe    { border-color: #4caf50; background: #e8f5e9; }
+    .result-item.warning { border-color: #ff9800; background: #fff3e0; }
+    .result-item.danger  { border-color: #f44336; background: #ffebee; }
+    .spinner { display:inline-block; width:1rem; height:1rem; border:2px solid #999; border-top-color:transparent; border-radius:50%; animation:spin .8s linear infinite; vertical-align:middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .risk-bar { height: 1rem; background: #ddd; border-radius:4px; overflow:hidden; margin-top:.5rem; }
+    .risk-fill { height:100%; width:0; background: #4caf50; transition: width .5s ease; }
+    .risk-fill.warning { background: #ff9800; }
+    .risk-fill.danger { background: #f44336; }
+    .report-btn { margin-top:.5rem; color:#c00; cursor:pointer; text-decoration:underline; background:none; border:none; }
+  </style>
+</head>
+<body>
+
+  <h1>🛑 Scam Listing Checker</h1>
+
+  <form id="check-form">
+    <label>
+      Marketplace URL:
+      <input type="url" id="url" required placeholder="https://facebook.com/marketplace/item/…">
+    </label>
+    <button type="submit">Run All Checks</button>
+  </form>
+
+  <div class="results" id="results" aria-live="polite">
+    <div class="result-item" id="seller-result">
+      <div><span class="spinner"></span> Seller Verification</div>
+      <p id="seller-text">Waiting…</p>
+    </div>
+
+    <div class="result-item" id="location-result">
+      <div><span class="spinner"></span> Location Consistency</div>
+      <p id="location-text">Waiting…</p>
+    </div>
+
+    <div class="result-item" id="image-result">
+      <div><span class="spinner"></span> Reverse-Image Search</div>
+      <p id="image-text">Waiting…</p>
+    </div>
+
+    <div class="result-item" id="price-result">
+      <div><span class="spinner"></span> Price Anomaly Check</div>
+      <p id="price-text">Waiting…</p>
+    </div>
+
+    <div class="result-item" id="desc-result">
+      <div><span class="spinner"></span> Language & Urgency Analysis</div>
+      <p id="desc-text">Waiting…</p>
+    </div>
+
+    <div class="result-item" id="risk-result">
+      <div>Composite Scam Risk Score</div>
+      <div class="risk-bar">
+        <div class="risk-fill" id="risk-fill"></div>
+      </div>
+      <p id="risk-text">Calculating…</p>
+      <button class="report-btn" id="report-btn">Report Suspicious Listing</button>
+    </div>
+  </div>
+
+  <script>
+    // Regex for description scanning
+    const SCAM_INDICATORS = {
+      URGENCY: /(urgent|need to sell|ASAP|today only|before it’s gone)/i,
+      BOILERPLATE: /(gift card|wire transfer|western union)/i
+    };
+
+    const form = document.getElementById('check-form');
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      resetUI();
+
+      const url = document.getElementById('url').value;
+      const checks = [
+        runSellerCheck(url),
+        runLocationCheck(url),
+        runImageCheck(url),
+        runPriceCheck(url),
+        runDescriptionCheck(url)
+      ];
+
+      // Wait for all and then aggregate risk
+      const results = await Promise.all(checks);
+      computeRiskScore(results);
+    });
+
+    function resetUI() {
+      document.querySelectorAll('.result-item').forEach(el => {
+        el.className = 'result-item';
+      });
+      ['seller','location','image','price','desc'].forEach(id => {
+        document.getElementById(id + '-text').textContent = 'Checking…';
+      });
+      const fill = document.getElementById('risk-fill');
+      fill.style.width = '0%';
+      fill.className = 'risk-fill';
+      document.getElementById('risk-text').textContent = 'Calculating…';
+    }
+
+    // 1) Seller Verification
+    async function runSellerCheck(url) {
+      const container = document.getElementById('seller-result');
+      const txt = document.getElementById('seller-text');
+      try {
+        // TODO: replace stub with real fetch to your back-end or platform API
+        const profile = await fetchSellerProfile(url);
+        const analysis = analyzeSeller(profile);
+        container.classList.add(analysis.status);
+        txt.textContent = analysis.message;
+        return analysis.score; // e.g. 0–100
+      } catch {
+        container.classList.add('danger');
+        txt.textContent = 'Error retrieving seller info.';
+        return 100;
+      }
+    }
+
+    function analyzeSeller(profile) {
+      const now = Date.now();
+      const ageDays = (now - new Date(profile.createdAt)) / 864e5;
+      if (ageDays < 7) {
+        return { status:'danger', message:'⚠️Seller account < 1 week old.', score: 90 };
+      }
+      if (profile.nameHistory.length > 1) {
+        return { status:'warning', message:'⚠️Name changed recently.', score: 60 };
+      }
+      return { status:'safe', message:'✅Seller profile OK.', score: 10 };
+    }
+
+    // 2) Location Match
+    async function runLocationCheck(url) {
+      const container = document.getElementById('location-result');
+      const txt = document.getElementById('location-text');
+      try {
+        const { listingLoc, profileLoc } = await fetchLocations(url);
+        if (listingLoc !== profileLoc) {
+          container.classList.add('danger');
+          txt.textContent = '⚠️Listing / profile location mismatch.';
+          return 80;
+        }
+        container.classList.add('safe');
+        txt.textContent = '✅Locations match.';
+        return 10;
+      } catch {
+        container.classList.add('danger');
+        txt.textContent = 'Error checking location.';
+        return 100;
+      }
+    }
+
+    // 3) Reverse-Image Search (TinEye stub)
+    async function runImageCheck(url) {
+      const container = document.getElementById('image-result');
+      const txt = document.getElementById('image-text');
+      try {
+        // TODO: replace with real TinEye API call & pass your API key
+        const matches = await fetchReverseImageMatches(url);
+        if (matches > 0) {
+          container.classList.add('danger');
+          txt.textContent = `⚠️Found ${matches}+ duplicates online.`;
+          return 85;
+        }
+        container.classList.add('safe');
+        txt.textContent = '✅No duplicate images found.';
+        return 5;
+      } catch {
+        container.classList.add('warning');
+        txt.textContent = 'Image search unavailable.';
+        return 50;
+      }
+    }
+
+    // 4) Price Anomaly Detection
+    async function runPriceCheck(url) {
+      const container = document.getElementById('price-result');
+      const txt = document.getElementById('price-text');
+      try {
+        // TODO: replace with real API (e.g. eBay browsing API)
+        const { price, avgPrice } = await fetchPriceData(url);
+        const pct = ((avgPrice - price) / avgPrice) * 100;
+        if (pct > 40) {
+          container.classList.add('danger');
+          txt.textContent = `⚠️Price ${pct.toFixed(0)}% below market.`;
+          return 75;
+        }
+        container.classList.add('safe');
+        txt.textContent = `✅Price within normal range.`;
+        return 10;
+      } catch {
+        container.classList.add('warning');
+        txt.textContent = 'Price check unavailable.';
+        return 50;
+      }
+    }
+
+    // 5) Description & Urgency
+    async function runDescriptionCheck(url) {
+      const container = document.getElementById('desc-result');
+      const txt = document.getElementById('desc-text');
+      try {
+        // TODO: fetch the listing description text
+        const desc = await fetchDescription(url);
+        const flags = [];
+        if (SCAM_INDICATORS.URGENCY.test(desc))  flags.push('Urgency cues');
+        if (SCAM_INDICATORS.BOILERPLATE.test(desc)) flags.push('Payment-method red flags');
+        if (flags.length) {
+          container.classList.add('warning');
+          txt.textContent = `⚠️Detected: ${flags.join(', ')}`;
+          return 60;
+        }
+        container.classList.add('safe');
+        txt.textContent = '✅Description looks natural.';
+        return 5;
+      } catch {
+        container.classList.add('warning');
+        txt.textContent = 'Description analysis failed.';
+        return 50;
+      }
+    }
+
+    // Aggregate risk: simple weighted average
+    function computeRiskScore(scores) {
+      const total = scores.reduce((a,b)=>a+b,0);
+      const avg = total / scores.length;
+      const fill = document.getElementById('risk-fill');
+      const txt  = document.getElementById('risk-text');
+      const btn  = document.getElementById('report-btn');
+
+      let status = 'safe';
+      if (avg > 70) status = 'danger';
+      else if (avg > 40) status = 'warning';
+
+      fill.style.width = `${Math.min(100,avg)}%`;
+      fill.classList.add(status);
+      txt.textContent = `Overall Risk: ${avg.toFixed(0)}%`;
+
+      btn.onclick = () => alert('Listing reported – thank you!');
+    }
+
+    // ==== STUBBED data-fetching functions ====
+    async function fetchSellerProfile(url) {
+      // Demo stub
+      return {
+        createdAt: '2025-08-05T12:00:00Z',
+        nameHistory: ['Alice']
+      };
+    }
+
+    async function fetchLocations(url) {
+      return { listingLoc: 'Brisbane, QLD', profileLoc: 'Brisbane, QLD' };
+    }
+
+    async function fetchReverseImageMatches(url) {
+      // TinEye: https://services.tineye.com/developers
+      // Return number of reverse-image hits
+      return 0;
+    }
+
+    async function fetchPriceData(url) {
+      // eBay Browse API stub
+      return { price: 120, avgPrice: 200 };
+    }
+
+    async function fetchDescription(url) {
+      // Return the listing text
+      return 'I must sell this ASAP! No trades please.';
+    }
+  </script>
+</body>
+</html>
